@@ -1,0 +1,296 @@
+# Blender script: generate Saraswathi-like seated statue on lotus with flat base and veena
+# Compatible with Blender 3.x / 4.x
+# Paste into Blender's Scripting editor and Run
+
+import bpy
+import bmesh
+from math import pi, sin, cos
+from mathutils import Vector, Euler
+
+def clear_scene():
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
+    # remove meshes and materials
+    for block in bpy.data.meshes:
+        bpy.data.meshes.remove(block)
+    for block in bpy.data.materials:
+        bpy.data.materials.remove(block)
+
+def make_base(radius=2.0, height=0.2):
+    bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=radius, depth=height, location=(0,0,height/2))
+    base = bpy.context.active_object
+    base.name = "Base"
+    return base
+
+def make_lotus(petal_count=10, petal_length=1.6, petal_width=0.6, offset_z=0.22):
+    # create single petal (scaled sphere stretched into petal)
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=32, ring_count=16, radius=1.0, location=(0,0,0))
+    petal = bpy.context.active_object
+    petal.name = "LotusPetal"
+    petal.scale = (petal_width, petal_length, 0.25)
+    bpy.ops.object.transform_apply(scale=True)
+    # move origin to bottom of petal for nicer rotation
+    bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
+    petal.location = (0, petal_length*0.6, offset_z)  # initial offset along y
+
+    petals = []
+    for i in range(petal_count):
+        p = petal.copy()
+        p.data = petal.data.copy()
+        bpy.context.collection.objects.link(p)
+        ang = (2*pi*i)/petal_count
+        p.rotation_euler = Euler((0, 0, ang), 'XYZ')
+        r = 1.0 * (1 + 0.05 * (i % 3))  # slight radial variation
+        p.location = Vector((r * sin(ang)*petal_length*0.1, r * cos(ang)*petal_length*0.1, offset_z))
+        petals.append(p)
+
+    # create inner smaller petals
+    for i in range(petal_count//2):
+        p = petal.copy()
+        p.data = petal.data.copy()
+        bpy.context.collection.objects.link(p)
+        ang = (2*pi*i)/(petal_count//2) + pi/petal_count
+        p.scale = (petal_width*0.6, petal_length*0.8, 0.2)
+        p.rotation_euler = Euler((0, 0, ang), 'XYZ')
+        p.location = Vector((0.12 * sin(ang), 0.12 * cos(ang), offset_z + 0.06))
+        petals.append(p)
+
+    # remove original template
+    bpy.data.objects.remove(petal, do_unlink=True)
+
+    # join petals into one object
+    for o in petals:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = petals[0]
+    bpy.ops.object.join()
+    lotus = bpy.context.active_object
+    lotus.name = "Lotus"
+    # smooth and add a subdivision for nicer shape
+    bpy.ops.object.shade_smooth()
+    sub = lotus.modifiers.new("Subsurf", type='SUBSURF')
+    sub.levels = 2
+    sub.render_levels = 2
+    return lotus
+
+def make_simple_human(scale=1.0, seated_height=1.1):
+    # Build simplified human from primitives and smooth them to look statue-like.
+    parts = []
+
+    # torso
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.35*scale, location=(0,0,seated_height+0.6*scale))
+    torso = bpy.context.active_object
+    torso.scale = (1.0*scale, 0.8*scale, 1.4*scale)
+    bpy.ops.object.transform_apply(scale=True)
+    torso.name = "Torso"
+    parts.append(torso)
+
+    # pelvis (slightly lower)
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.28*scale, location=(0,0,seated_height+0.25*scale))
+    pelvis = bpy.context.active_object
+    pelvis.scale = (1.1*scale, 0.9*scale, 0.7*scale)
+    bpy.ops.object.transform_apply(scale=True)
+    pelvis.name = "Pelvis"
+    parts.append(pelvis)
+
+    # head
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.18*scale, location=(0,0,seated_height+1.4*scale))
+    head = bpy.context.active_object
+    head.name = "Head"
+    parts.append(head)
+
+    # neck
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.08*scale, depth=0.18*scale, location=(0,0,seated_height+1.18*scale))
+    neck = bpy.context.active_object
+    neck.rotation_euler = Euler((0,0,0))
+    neck.name = "Neck"
+    parts.append(neck)
+
+    # arms (upper + lower cylinders)
+    def make_arm(side=1):
+        # shoulder position relative to torso
+        sx = 0.37*side*scale
+        sy = 0
+        sz = seated_height+0.9*scale
+        # upper arm
+        bpy.ops.mesh.primitive_cylinder_add(radius=0.07*scale, depth=0.5*scale, location=(sx, sy, sz-0.15*scale))
+        upper = bpy.context.active_object
+        upper.rotation_euler = Euler((0, 0, 1.1*side), 'XYZ')
+        upper.name = f"UpperArm_{side}"
+        parts.append(upper)
+        # lower arm
+        bpy.ops.mesh.primitive_cylinder_add(radius=0.06*scale, depth=0.45*scale, location=(sx+0.28*side, sy, sz-0.35*scale))
+        lower = bpy.context.active_object
+        lower.rotation_euler = Euler((0, 0, 0.4*side), 'XYZ')
+        lower.name = f"LowerArm_{side}"
+        parts.append(lower)
+        # hand
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.07*scale, location=(sx+0.5*side, sy, sz-0.5*scale))
+        hand = bpy.context.active_object
+        hand.name = f"Hand_{side}"
+        parts.append(hand)
+
+    make_arm(1)   # right arm
+    make_arm(-1)  # left arm
+
+    # legs (bent to seated position)
+    def make_leg(side=1):
+        # upper leg (thigh)
+        bpy.ops.mesh.primitive_cylinder_add(radius=0.09*scale, depth=0.5*scale, location=(0.22*side*scale, 0, seated_height-0.05*scale))
+        upper = bpy.context.active_object
+        upper.rotation_euler = Euler((1.1, 0, 0.2*side), 'XYZ')
+        upper.name = f"Thigh_{side}"
+        parts.append(upper)
+        # lower leg
+        bpy.ops.mesh.primitive_cylinder_add(radius=0.08*scale, depth=0.45*scale, location=(0.45*side*scale, 0, seated_height-0.4*scale))
+        lower = bpy.context.active_object
+        lower.rotation_euler = Euler((1.6, 0, 0.2*side), 'XYZ')
+        lower.name = f"Calf_{side}"
+        parts.append(lower)
+        # foot
+        bpy.ops.mesh.primitive_cube_add(size=0.16*scale, location=(0.6*side*scale, 0, seated_height-0.6*scale))
+        foot = bpy.context.active_object
+        foot.scale = (1.3, 0.7, 0.4)
+        bpy.ops.object.transform_apply(scale=True)
+        foot.name = f"Foot_{side}"
+        parts.append(foot)
+
+    make_leg(1)
+    make_leg(-1)
+
+    # join all parts
+    for o in parts:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = parts[0]
+    bpy.ops.object.join()
+    human = bpy.context.active_object
+    human.name = "Saraswathi_BaseFigure"
+    # smooth and subdiv
+    bpy.ops.object.shade_smooth()
+    sub = human.modifiers.new("Subsurf", type='SUBSURF')
+    sub.levels = 2
+    sub.render_levels = 2
+
+    # slightly scale to look statue-like and position sitting on lotus
+    human.location.z = 0.0
+    return human
+
+def add_veena(length=2.0):
+    # Create a simplified veena: long neck + resonator bowl
+    # neck as a tapered cylinder (use cone)
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.035, depth=length, location=(0.0, 0.0, 0.9))
+    neck = bpy.context.active_object
+    neck.name = "Veena_Neck"
+    neck.rotation_euler = Euler((0, 0.35, -0.9), 'XYZ')  # angled across lap
+    # make slight taper by scaling one end via edit mode
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(neck.data)
+    # select top vertices to scale
+    for v in bm.verts:
+        if v.co.z > 0:
+            pass
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    # resonator
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.18, location=(0.95, -0.05, 0.6))
+    bowl = bpy.context.active_object
+    bowl.scale = (1.0, 1.6, 0.7)
+    bpy.ops.object.transform_apply(scale=True)
+    bowl.name = "Veena_Bowl"
+
+    # small bridge + tuning peg (cubes)
+    bpy.ops.mesh.primitive_cube_add(size=0.05, location=(0.15, 0.0, 0.95))
+    bridge = bpy.context.active_object
+    bridge.name = "Veena_Bridge"
+    bpy.ops.mesh.primitive_cube_add(size=0.06, location=(-0.9, -0.12, 0.88))
+    peg = bpy.context.active_object
+    peg.name = "Veena_Peg"
+
+    # join veena parts
+    for o in [neck, bowl, bridge, peg]:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = neck
+    bpy.ops.object.join()
+    veena = bpy.context.active_object
+    veena.name = "Veena"
+    bpy.ops.object.shade_smooth()
+    return veena
+
+def apply_stone_material(obj, name="Stone_Mat"):
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs["Base Color"].default_value = (0.55, 0.55, 0.55, 1)  # grey stone
+    bsdf.inputs["Roughness"].default_value = 0.8
+    bsdf.inputs["Specular"].default_value = 0.1
+    # add slight bump via noise texture
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    tex = nodes.new("ShaderNodeTexNoise")
+    tex.inputs["Scale"].default_value = 20.0
+    bump = nodes.new("ShaderNodeBump")
+    links.new(tex.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    # assign
+    if obj.data.materials:
+        obj.data.materials[0] = mat
+    else:
+        obj.data.materials.append(mat)
+    return mat
+
+def assemble_scene():
+    clear_scene()
+    base = make_base(radius=2.2, height=0.22)
+    lotus = make_lotus(petal_count=10, petal_length=1.4, petal_width=0.55, offset_z=0.23)
+    human = make_simple_human(scale=1.0, seated_height=0.4)
+    # position human onto lotus
+    human.location = Vector((0.0, 0.0, 0.36))
+    # rotate/pose approximate: slight forward lean
+    human.rotation_euler = Euler((0,0,0), 'XYZ')
+
+    # make veena and position so arms appear to hold it
+    veena = add_veena(length=2.0)
+    veena.location = Vector((0.0, 0.0, 0.0))
+    veena.rotation_euler = Euler((0, 0.35, -0.9), 'XYZ')
+    veena.location = Vector((0.05, 0.15, 0.9))
+
+    # join lotus + base + human + veena into one object optionally or keep separate
+    # create a parent empty for easy export/selection
+    bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0,0,0))
+    parent = bpy.context.active_object
+    parent.name = "Saraswathi_Statue_Group"
+
+    for ob in [base, lotus, human, veena]:
+        try:
+            ob.parent = parent
+        except:
+            pass
+
+    # Apply stone material to main visible parts
+    stone = apply_stone_material(human, "Stone_Material")
+    apply_stone_material(lotus, "Stone_Material")
+    apply_stone_material(base, "Stone_Material")
+    apply_stone_material(veena, "Stone_Material")
+
+    # Optional: add a simple sun lamp and camera for preview
+    bpy.ops.object.light_add(type='SUN', location=(5,5,8))
+    sun = bpy.context.active_object
+    sun.data.energy = 2.0
+    bpy.ops.object.camera_add(location=(3.5, -3.5, 2.5), rotation=(1.1, 0, 0.78))
+    cam = bpy.context.active_object
+    cam.data.lens = 35
+
+    # select group for export convenience
+    bpy.ops.object.select_all(action='DESELECT')
+    parent.select_set(True)
+    bpy.context.view_layer.objects.active = parent
+
+    return parent
+
+# Build scene
+parent = assemble_scene()
+
+# Optionally export to glb: change the path below to your desired output path
+# If you prefer to export manually via Blender UI, comment out the next lines.
+export_path = bpy.path.abspath("//saraswathi_statue.glb")  # saves next to .blend file; change if needed
+bpy.ops.export_scene.gltf(filepath=export_path, export_format='GLB', export_selected=True)
+print("Exported GLB to:", export_path)
